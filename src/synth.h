@@ -5,6 +5,9 @@
 //  Optimized audio driver, modulation engine, envelope engine.
 //
 //  Dzl/Illutron 2014
+// 
+//  11 Feb. 2017 ChrisMicro, added support for Attiny85 using only timer1, 
+//                           sound output is PB1 on ATTINY85 
 //
 //*************************************************************************************
 #include <avr/pgmspace.h>
@@ -59,9 +62,16 @@ volatile unsigned char output_mode;
 //*********************************************************************************************
 //  Audio driver interrupt
 //*********************************************************************************************
+uint8_t Output;
 
 SIGNAL(TIMER1_COMPA_vect)
 {
+  #ifdef __AVR_ATtiny85__
+	OCR1A = OCR1B = Output;
+  #else
+	OCR2A = OCR2B = Output;	
+  #endif
+
   //-------------------------------
   // Time division
   //-------------------------------
@@ -81,8 +91,7 @@ SIGNAL(TIMER1_COMPA_vect)
   //-------------------------------
   //  Synthesizer/audio mixer
   //-------------------------------
-
-  OCR2A = OCR2B = 127 +
+  Output = 127 +
     ((
   (((signed char)pgm_read_byte(wavs[0] + ((unsigned char *)&(PCW[0] += FTW[0]))[1]) * AMP[0]) >> 8) +
     (((signed char)pgm_read_byte(wavs[1] + ((unsigned char *)&(PCW[1] += FTW[1]))[1]) * AMP[1]) >> 8) +
@@ -114,19 +123,48 @@ public:
 
   void begin()
   {
-    output_mode=CHA;
-    TCCR1A = 0x00;                                  //-Start audio interrupt
-    TCCR1B = 0x09;
-    TCCR1C = 0x00;
-    OCR1A=16000000.0 / FS;			    //-Auto sample rate
-    SET(TIMSK1, OCIE1A);                            //-Start audio interrupt
-    sei();                                          //-+
+    #ifdef __AVR_ATtiny85__
+	cli();
 
-    TCCR2A = 0x83;                                  //-8 bit audio PWM
-    TCCR2B = 0x01;                                  // |
-    OCR2A = 127;                                    //-+
-    SET(DDRB, 3);				    //-PWM pin
-  }
+	// Set up Timer/Counter1 62kHz.
+	TCCR1 &= ~(7<<CS10);   // make sure bits are empty
+	TCCR1 |= 1<<CS10;      // set prescaler
+
+	// pulse width modulator A enable
+	TCCR1 &= ~(1 << COM1A0);  // make sure register is empty
+	TCCR1 |=   1 << COM1A1 ; // PWM mode: clear the OC1A output line on compare match
+
+	TCCR1 |=   1 << PWM1A;   // PWM mode based on comparator OCR1A
+
+	// pulse width modulator B enable
+	//GTCCR |= 1 << PWM1B | 2 << COM1B0; // PWM B, clear on match
+	//GTCCR |= 1 << PWM1B;
+
+	TIMSK |= 1 << OCIE1A;          // Enable compare match interrupt for timer 1
+
+	OCR1A = 128;                   // initialize PWM to 50% mean value
+
+	sei();
+
+	//pinMode(1, OUTPUT);            // Enable PWM output pin
+	//digitalWrite(1, 1);
+	SET(DDRB, 1);				    //-PWM pin
+
+     #else
+	output_mode=CHA;
+	TCCR1A = 0x00;                                  //-Start audio interrupt
+	TCCR1B = 0x09;
+	TCCR1C = 0x00;
+	OCR1A=16000000.0 / FS;			    //-Auto sample rate
+	SET(TIMSK1, OCIE1A);                            //-Start audio interrupt
+	sei();                                          //-+
+
+	TCCR2A = 0x83;                                  //-8 bit audio PWM
+	TCCR2B = 0x01;                                  // |
+	OCR2A = 127;                                    //-+
+	SET(DDRB, 3);				    //-PWM pin	
+     #endif
+   }
 
   //*********************************************************************
   //  Startup fancy selecting varoius output modes
@@ -134,42 +172,48 @@ public:
 
   void begin(unsigned char d)
   {
-    TCCR1A = 0x00;                                  //-Start audio interrupt
-    TCCR1B = 0x09;
-    TCCR1C = 0x00;
-    OCR1A=16000000.0 / FS;			    //-Auto sample rate
-    SET(TIMSK1, OCIE1A);                            //-Start audio interrupt
-    sei();                                          //-+
 
-    output_mode=d;
+    #ifdef __AVR_ATtiny85__
 
-    switch(d)
-    {
-    case DIFF:                                        //-Differntial signal on CHA and CHB pins (11,3)
-      TCCR2A = 0xB3;                                  //-8 bit audio PWM
-      TCCR2B = 0x01;                                  // |
-      OCR2A = OCR2B = 127;                            //-+
-      SET(DDRB, 3);				      //-PWM pin
-      SET(DDRD, 3);				      //-PWM pin
-      break;
 
-    case CHB:                                         //-Single ended signal on CHB pin (3)
-      TCCR2A = 0x23;                                  //-8 bit audio PWM
-      TCCR2B = 0x01;                                  // |
-      OCR2A = OCR2B = 127;                            //-+
-      SET(DDRD, 3);				      //-PWM pin
-      break;
+    #else
+	  
+	TCCR1A = 0x00;                                  //-Start audio interrupt
+	TCCR1B = 0x09;
+	TCCR1C = 0x00;
+	OCR1A=16000000.0 / FS;			    //-Auto sample rate
+	SET(TIMSK1, OCIE1A);                            //-Start audio interrupt
+	sei();                                          //-+
 
-    case CHA:
-    default:
-      output_mode=CHA;                                //-Single ended signal in CHA pin (11)
-      TCCR2A = 0x83;                                  //-8 bit audio PWM
-      TCCR2B = 0x01;                                  // |
-      OCR2A = OCR2B = 127;                            //-+
-      SET(DDRB, 3);				      //-PWM pin
-      break;
+	output_mode=d;
 
-    }
+	switch(d)
+	{
+		case DIFF:                                        //-Differntial signal on CHA and CHB pins (11,3)
+		TCCR2A = 0xB3;                                  //-8 bit audio PWM
+		TCCR2B = 0x01;                                  // |
+		OCR2A = OCR2B = 127;                            //-+
+		SET(DDRB, 3);				      //-PWM pin
+		SET(DDRD, 3);				      //-PWM pin
+		break;
+
+		case CHB:                                         //-Single ended signal on CHB pin (3)
+		TCCR2A = 0x23;                                  //-8 bit audio PWM
+		TCCR2B = 0x01;                                  // |
+		OCR2A = OCR2B = 127;                            //-+
+		SET(DDRD, 3);				      //-PWM pin
+		break;
+
+		case CHA:
+		default:
+		output_mode=CHA;                                //-Single ended signal in CHA pin (11)
+		TCCR2A = 0x83;                                  //-8 bit audio PWM
+		TCCR2B = 0x01;                                  // |
+		OCR2A = OCR2B = 127;                            //-+
+		SET(DDRB, 3);				      //-PWM pin
+		break;
+	}
+    #endif
   }
 
   //*********************************************************************
@@ -335,14 +379,26 @@ public:
   //  Suspend/resume synth
   //*********************************************************************
 
-  void suspend()
-  {
-    CLR(TIMSK1, OCIE1A);                            //-Stop audio interrupt
-  }
-  void resume()
-  {
-    SET(TIMSK1, OCIE1A);                            //-Start audio interrupt
-  }
+   #ifdef __AVR_ATtiny85__
+	  void suspend()
+	  {  
+	    CLR(TIMSK, OCIE1A);                            //-Stop audio interrupt
+	  }
+	  void resume()
+	  {
+	    SET(TIMSK, OCIE1A);                            //-Start audio interrupt
+	  }
+  #else
+	  void suspend()
+	  {	  
+	    CLR(TIMSK1, OCIE1A);                            //-Stop audio interrupt
+	  }
+	  void resume()
+	  {
+	    SET(TIMSK1, OCIE1A);                            //-Start audio interrupt
+	  }
+  
+  #endif
 
 };
 
